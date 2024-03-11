@@ -1,0 +1,57 @@
+Minesweeper solver
+==================
+
+This is a program that does one of two things:
+
+1.  Takes a complete minesweeper board, a starting point and proceeds to figure
+    out and print a step by step solution. Each "step" is whatever can be
+    figured out by looking at a board without actually clicking anything. When
+    the program figures out a step it does all the "clicks" and proceeds to
+    figure out the next step. It stops when all the mines are flagged or when
+    it encounters a situation where no progress can be made without guessing.
+
+2.  Takes a partial solution, figures out every mine and non-mine cell it can
+    and prints a board with deduced mines and clear cells.
+
+The boards shall be represented as text. Each line of text stands for one row
+in a minesweeper board. Each letter or digit character is interpreted as a
+cell. Whitespace is ignored. Characters for cells are as follows.
+
+    ?   Unknown
+    .   Clear
+    #   Mine
+    1-8 Number of surrounding mines
+
+If a given board contains no unknown cells then it is taken that the user is
+asking for a complete solution from a given starting point. Starting point
+shall be provided via command-line arguments. If the board does contain unknown
+cells then the program shall figure out one step and print that.
+
+Note that surrounding cell counts are needed for partial boards.
+
+Full board example
+------------------
+
+# . . . . . . .
+. # . . . . . .
+. . . . . # # .
+. . . . . . . .
+. . . # . . . .
+. # . . . . # .
+. . . . . . . .
+. . . . # . . .
+
+Partial board example
+---------------------
+
+? ? 1 2 ? ? ? ?
+? ? 1 2 # ? ? ?
+? ? 1 1 1 ? ? ?
+? ? 1 1 1 ? ? ?
+? ? # 2 1 ? ? ?
+? ? # 2 1 # ? ?
+? # 2 1 1 1 ? ?
+? 1 1 . . . ? ?
+
+Partial board mine counts are checked for consistency and an error will be
+emitted if counts do not line up with known mines.
