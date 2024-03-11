@@ -1,24 +1,25 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "board.h"
 
-static int parse_ul(const char *str, int base, unsigned long *ret);
+static int parse_i(const char *str, int base, int *ret);
 
 int main(const int argc, const char **argv)
 {
 	struct minesweeper_board board = {0};
 	struct gr_buffer strbuf;
 	int ret = 0;
-	unsigned long row = 0;
-	unsigned long col = 0;
+	int row = 0;
+	int col = 0;
 
 	gr_buf_init(&strbuf, 64);
 
 	if (argc == 3) {
-		if (parse_ul(argv[1], 0, &row) || parse_ul(argv[2], 0, &col)) {
+		if (parse_i(argv[1], 0, &row) || parse_i(argv[2], 0, &col)) {
 			ret = 1;
 			goto end;
 		}
@@ -66,16 +67,19 @@ end:
 	return ret;
 }
 
-static int parse_ul(const char *str, int base, unsigned long *ret)
+static int parse_i(const char *str, int base, int *ret)
 {
+	long maybe_ret;
 	int err = 0;
 	char *endptr;
 
 	errno = 0;
-	*ret = strtoul(str, &endptr, base);
+	maybe_ret = strtol(str, &endptr, base);
 
-	if (*endptr || errno)
+	if (*endptr || errno || maybe_ret < INT_MIN || maybe_ret > INT_MAX)
 		return 1;
+
+	*ret = (int)maybe_ret;
 
 	return err;
 }

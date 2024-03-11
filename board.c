@@ -4,8 +4,9 @@
 #include <gramas/buf.h>
 #include <gramas/line_reader.h>
 
-#include "board.h"
 #include "bits.h"
+#include "board.h"
+#include "combine.h"
 
 static int board_assume_clear(struct minesweeper_board *board, int row, int col);
 static int board_assume_mine(struct minesweeper_board *board, int row, int col);
@@ -712,15 +713,14 @@ static int board_count_known_outside_mines(
 
 /* This is meant to solve the more difficult cases, like:
  *
- *      . 1 ?
- *      2 4 ?
- *      # # ?
+ *      . . 1 ?
+ *      . . 1 ?
+ *      1 2 4 ?
+ *      1 # # ?
  *
  * A partial solution can be found by enumarating all technically possible
  * solutions and picking out which tiles are always mines and which are always
  * clear.
- *
- * This function works only on 3x3 areas.
  * */
 static int board_deduce_partial_from_tile(struct minesweeper_board *board, int row, int col)
 {
@@ -757,8 +757,17 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 	uint16_t unknown_mask = 0;	/* Mines can be placed here */
 	unsigned char *tile;
 	unsigned char total_mines;
+
+	/* How many mines are expected to come from the neighborhood of this tile */
 	unsigned char expected_mine_counts[9];
+
 	unsigned char unknown_outside_neighbors[9] = { 0 };
+
+	unsigned char mine_locations = 0;		/* How many tiles can host a mine */
+	unsigned char known_mines = 0;			/* Number of mines we know locations of */
+	unsigned char missing_mines = 0;		/* Mines we must place */
+	unsigned char possible_mine_locations[9];	/* Indices of possible mine locations */
+	struct n_choose_k_uc_itr nck_itr;		/* Generator of unique choices */
 
 	if (BOARD_AT(board, row, col) > 8)
 		goto end;
@@ -782,45 +791,48 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 				board, row, col, row + ro, col + co);
 		}
 
-		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN)
-			unknown_mask |= 1 << (tile_idx);
+		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN) {
+			unknown_tile_mask |= 1 << (tile_idx);
+			possible_mine_locations[mine_locations++] = tile_idx;
+		}
 
-		if (((*tile & ~TILE_DEDUCED) & (TILE_UNKNOWN | TILE_MINE)) == TILE_MINE)
-			mine_mask |= 1 << (tile_idx);
+		if (((*tile & ~TILE_DEDUCED) & (TILE_UNKNOWN | TILE_MINE)) == TILE_MINE) {
+			known_mine_mask |= 1 << (tile_idx);
+			known_mines++;
+		}
 
 		unknown_outside_neighbors[tile_idx] = board_count_unknown_outside_neighbors(
 				board, row, col, row + ro, col + co);
 	}
 
-	if (popcount(mine_mask) == total_mines || !unknown_mask)
+	if (known_mines == total_mines || !unknown_tile_mask)
 		goto end;
 
+	missing_mines = total_mines - known_mines;
+
 	/* We can only deduce information that was not previously known */
-	always_mine = unknown_mask;
-	always_clear = unknown_mask;
+	always_mine = unknown_tile_mask;
+	always_clear = unknown_tile_mask;
 
 	viable_solutions_exist = 0;
 
 	/* Enumarate all mine placements */
-	for (mines = ~(~0U << total_mines); mines < (1 << 9) && (always_mine || always_clear); mines++) {
-		/* Mines that must exist do not */
-		if ((mines & mine_mask) != mine_mask)
-			continue;
+	FOREACH_N_CHOOSE_K(&nck_itr, mine_locations, missing_mines) {
+		if (!always_mine && !always_clear)
+			break;
 
-		/* Mines are misplaced */
-		if ((mines & (mine_mask | unknown_mask)) != mines)
-			continue;
+		mines = known_mine_mask;
 
-		/* Too many or too few mines */
-		if (popcount(mines) != total_mines)
-			continue;
+		for (i = 0; i < nck_itr.nchoices; i++) {
+			mines |= 1 << (possible_mine_locations[nck_itr.choices[i]]);
+		}
 
 		/* Check if current layout produces the expected mine neighbor
 		 * counts.
 		 * */
 		for (i = 0; (size_t)i < sizeof(expected_mine_counts); i++) {
 			/* Not a clear tile. Next. */
-			if ((1 << i) & (mine_mask | unknown_mask))
+			if ((1 << i) & (known_mine_mask | unknown_tile_mask))
 				continue;
 
 			if (expected_mine_counts[i] - popcount(mines & mine_count_masks[i])
@@ -847,7 +859,8 @@ enumerate_next:
 		goto end;
 
 	/* We got tiles that throughout every technically possible solution
-	 * always remained mines. Therefore, they must be mines.
+	 * always remained clear or contained mines. Such tiles are guaranteed
+	 * to be clear or contain mines respectively.
 	 * */
 	for (i = 0; i < 3 && always_mine; i++) {
 		for (j = 0; j < 3; j++) {
@@ -856,14 +869,6 @@ enumerate_next:
 
 			if (always_mine & (1 << (i * 3 + j)))
 				BOARD_AT(board, row - 1 + i, col - 1 + j) = TILE_DEDUCED | TILE_MINE;
-		}
-	}
-
-	/* Same as above but for clear tiles */
-	for (i = 0; i < 3 && always_clear; i++) {
-		for (j = 0; j < 3; j++) {
-			if (!(BOARD_AT(board, row - 1 + i, col - 1 + j) & TILE_UNKNOWN))
-				continue;
 
 			if (always_clear & (1 << (i * 3 + j)))
 				BOARD_AT(board, row - 1 + i, col - 1 + j) = TILE_DEDUCED | TILE_CLEAR;
