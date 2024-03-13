@@ -8,15 +8,17 @@
 #include "board.h"
 #include "combine.h"
 
-static int board_assume_clear(struct minesweeper_board *board, int row, int col);
-static int board_assume_mine(struct minesweeper_board *board, int row, int col);
-static int board_assume_neighbors_clear(struct minesweeper_board *board, int row, int col);
-static int board_assume_neighbors_mines(struct minesweeper_board *board, int row, int col);
+#ifndef BOARD_DEBUG
+#	define BOARD_DEBUG 0
+#endif
+
+static void board_reveal_neighbors_clear(struct minesweeper_board *board, int row, int col);
+static void board_reveal_neighbors_mines(struct minesweeper_board *board, int row, int col);
 static int board_deduce_from_tile(struct minesweeper_board *board, int row, int col);
 static int board_deduce_guaranteed_cases(struct minesweeper_board *board);
 static int board_deduce_partial_cases(struct minesweeper_board *board);
 static int board_deduce_partial_from_tile(struct minesweeper_board *board, int row, int col);
-static int board_fill_empty_tiles(struct minesweeper_board *board, int row, int col);
+static void board_fill_empty_tiles(struct minesweeper_board *board, int row, int col);
 static int board_is_solved(struct minesweeper_board *board);
 static void board_resize_if_needed(struct minesweeper_board *board, int row, int col);
 static void board_set_deduced_as_known(struct minesweeper_board *board);
@@ -213,6 +215,19 @@ int board_to_string_buf(const struct minesweeper_board *board, struct gr_buffer 
 
 		gr_buf_append_char(strbuf, '\n');
 	}
+
+	return ret;
+}
+
+int board_print(const struct minesweeper_board *board, FILE *out)
+{
+	struct gr_buffer strbuf;
+	int ret;
+
+	gr_buf_init(&strbuf, 1024);
+	ret = board_to_string_buf(board, &strbuf);
+	buf_write(&strbuf, out);
+	gr_buf_delete(&strbuf);
 
 	return ret;
 }
@@ -430,20 +445,11 @@ static int board_solve_from_tile(struct minesweeper_board *board, int row, int c
 	if (!unknown_neighbors) return 0;
 
 	if (surrounding_mines == 0) {
-		if (board_fill_empty_tiles(board, row, col)) {
-			fputs("Error while filling empty tiles!\n", stderr);
-			return BOARD_SOLVE_TILE_ERROR;
-		}
+		board_fill_empty_tiles(board, row, col);
 	} else if (surrounding_mines == known_mines) {
-		if (board_assume_neighbors_clear(board, row, col)) {
-			fputs("Wrongly assumed all neighbors are clear!\n", stderr);
-			return BOARD_SOLVE_TILE_ERROR;
-		}
+		board_reveal_neighbors_clear(board, row, col);
 	} else if (unknown_neighbors + known_mines == surrounding_mines) {
-		if (board_assume_neighbors_mines(board, row, col)) {
-			fputs("Wrongly assumed all neighbors are mines!\n", stderr);
-			return BOARD_SOLVE_TILE_ERROR;
-		}
+		board_reveal_neighbors_mines(board, row, col);
 	} else {
 		return BOARD_SOLVE_TILE_NOTHING;
 	}
@@ -451,7 +457,10 @@ static int board_solve_from_tile(struct minesweeper_board *board, int row, int c
 	return BOARD_SOLVE_TILE_SUCCESS;
 }
 
-static int board_assume_neighbors_mines(struct minesweeper_board *board, int row, int col)
+static void tile_reveal_mine(struct minesweeper_board *board, int row, int col);
+static void tile_reveal_clear(struct minesweeper_board *board, int row, int col);
+
+static void board_reveal_neighbors_mines(struct minesweeper_board *board, int row, int col)
 {
 	int i;
 	int j;
@@ -459,13 +468,10 @@ static int board_assume_neighbors_mines(struct minesweeper_board *board, int row
 
 	BOARD_FOREACH_NEIGHBOR(board, row, col, i, j, tile)
 		if (*tile & TILE_UNKNOWN)
-			if (board_assume_mine(board, row + i, col + j))
-				return 1;
-
-	return 0;
+			tile_reveal_mine(board, row + i, col + j);
 }
 
-static int board_assume_neighbors_clear(struct minesweeper_board *board, int row, int col)
+static void board_reveal_neighbors_clear(struct minesweeper_board *board, int row, int col)
 {
 	int i;
 	int j;
@@ -473,33 +479,10 @@ static int board_assume_neighbors_clear(struct minesweeper_board *board, int row
 
 	BOARD_FOREACH_NEIGHBOR(board, row, col, i, j, tile)
 		if (*tile & TILE_UNKNOWN)
-			if (board_assume_clear(board, row + i, col + j))
-				return 1;
-
-	return 0;
+			tile_reveal_clear(board, row + i, col + j);
 }
 
-static int board_assume_mine(struct minesweeper_board *board, int row, int col)
-{
-	if (BOARD_AT(board, row, col) & TILE_MINE) {
-		BOARD_AT(board, row, col) |= TILE_DEDUCED;
-		return 0;
-	} else {
-		return 1;
-	}
-}
-
-static int board_assume_clear(struct minesweeper_board *board, int row, int col)
-{
-	if (!(BOARD_AT(board, row, col) & TILE_MINE)) {
-		BOARD_AT(board, row, col) |= TILE_DEDUCED;
-		return 0;
-	} else {
-		return 1;
-	}
-}
-
-static int board_fill_empty_tiles(struct minesweeper_board *board, int row, int col)
+static void board_fill_empty_tiles(struct minesweeper_board *board, int row, int col)
 {
 	struct tile_coordinate_s {
 		int row;
@@ -514,7 +497,7 @@ static int board_fill_empty_tiles(struct minesweeper_board *board, int row, int 
 	unsigned char *tile;
 
 	if (BOARD_AT(board, row, col) != TILE_CLEAR)
-		return 1;
+		return;
 
 	tiles_to_fill = malloc(sizeof(tiles_to_fill[0]) * board->rows * board->cols);
 
@@ -528,43 +511,47 @@ static int board_fill_empty_tiles(struct minesweeper_board *board, int row, int 
 			if (*tile == (TILE_UNKNOWN | TILE_CLEAR)) {
 				write_head->row = current->row + ro;
 				write_head->col = current->col + co;
-				*tile |= TILE_DEDUCED;
 				write_head++;
-			} else if (*tile & TILE_UNKNOWN) {
-				*tile |= TILE_DEDUCED;
 			}
+
+			tile_reveal_clear(board, current->row + ro, current->col + co);
 		}
 
 		current++;
 	}
 
 	free(tiles_to_fill);
-
-	return 0;
 }
 
 #define BUF_APPEND_STR(__buf, __str) do { gr_buf_append(__buf, __str, sizeof(__str) - 1); } while (0)
 
 void board_deduce_partial(struct minesweeper_board *board)
 {
+	long max_attempts;
+	int attempts = 0;
 	int ret = BOARD_SOLVE_MUST_GUESS;
 	struct gr_buffer strbuf;
 
 	gr_buf_init(&strbuf, 64);
+	max_attempts = board->rows * board->cols;
 
-	while (1) {
+	while (attempts < max_attempts) {
 		switch (board_deduce_guaranteed_cases(board)) {
 		case BOARD_SOLVE_SUCCESS:
 		case BOARD_SOLVE_PARTIAL:
+			attempts++;
 			ret = BOARD_SOLVE_SUCCESS;
 			break;
 		case BOARD_SOLVE_MUST_GUESS:
 			switch (board_deduce_partial_cases(board)) {
 			case BOARD_SOLVE_SUCCESS:
+				attempts++;
 				ret = BOARD_SOLVE_SUCCESS;
 				goto again;
-			case BOARD_SOLVE_MUST_GUESS: goto end;
-			case BOARD_SOLVE_BUG: goto bug;
+			case BOARD_SOLVE_MUST_GUESS:
+				goto end;
+			case BOARD_SOLVE_BUG:
+				goto bug;
 			}
 
 			if (ret != BOARD_SOLVE_SUCCESS)
@@ -580,7 +567,12 @@ again:
 	}
 
 end:
-	BUF_APPEND_STR(&strbuf, "Deduced:\n");
+	if (attempts < max_attempts) {
+		BUF_APPEND_STR(&strbuf, "Deduced:\n");
+	} else {
+		BUF_APPEND_STR(&strbuf, "It's taking too long. Clearly, we fucked something up...\n");
+	}
+
 	board_to_string_buf(board, &strbuf);
 	buf_write(&strbuf, stdout);
 
@@ -619,6 +611,22 @@ end:
 	return ret;
 }
 
+static void tile_deduce_clear(const struct minesweeper_board *board, int row, int col, int ro, int co);
+static void tile_deduce_mine(const struct minesweeper_board *board, int row, int col, int ro, int co);
+
+struct tile_neighborhood_s {
+	int n_mines;
+	int n_unknown;
+	unsigned char tile;
+	unsigned char mines;
+	unsigned char unknown;
+};
+
+static void tile_neighborhood(
+		const struct minesweeper_board *board,
+		int row, int col,
+		struct tile_neighborhood_s *ret);
+
 /* This function solves simple cases like the following:
  *
  *	1 1 1	1 2 2
@@ -633,37 +641,29 @@ static int board_deduce_from_tile(struct minesweeper_board *board, int row, int 
 {
 	int i;
 	int j;
-	int unknown_neighbors = 0;
-	int known_mines = 0;
 	unsigned char *tile;
 	unsigned char surrounding_mines = 0;
+	struct tile_neighborhood_s hood;
 
 	tile = &BOARD_AT(board, row, col);
 
 	if (*tile > 8) return BOARD_SOLVE_TILE_NOTHING;
 
 	surrounding_mines = *tile;
+	tile_neighborhood(board, row, col, &hood);
 
-	BOARD_FOREACH_NEIGHBOR(board, row, col, i, j, tile) {
-		if ((*tile & ~TILE_DEDUCED) == TILE_MINE)
-			known_mines++;
+	if (!hood.unknown) return BOARD_SOLVE_TILE_NOTHING;
 
-		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN)
-			unknown_neighbors++;
-	}
-
-	if (!unknown_neighbors) return BOARD_SOLVE_TILE_NOTHING;
-
-	if (surrounding_mines == 0 || surrounding_mines == known_mines) {
+	if (surrounding_mines == 0 || surrounding_mines == hood.n_mines) {
 		BOARD_FOREACH_NEIGHBOR(board, row, col, i, j, tile)
 			if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN)
-				*tile = TILE_CLEAR | TILE_DEDUCED;
+				tile_deduce_clear(board, row, col, i, j);
 
 		return BOARD_SOLVE_TILE_SUCCESS;
-	} else if (unknown_neighbors + known_mines == surrounding_mines) {
+	} else if (hood.n_unknown + hood.n_mines == surrounding_mines) {
 		BOARD_FOREACH_NEIGHBOR(board, row, col, i, j, tile)
 			if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN)
-				*tile = TILE_MINE | TILE_DEDUCED;
+				tile_deduce_mine(board, row, col, i, j);
 
 		return BOARD_SOLVE_TILE_SUCCESS;
 	} else {
@@ -678,12 +678,18 @@ static int board_deduce_partial_cases(struct minesweeper_board *board)
 	int i;
 	int j;
 	int ret = BOARD_SOLVE_MUST_GUESS;
+	unsigned char tile;
 
 	if (board->rows < 3 || board->cols < 3)
 		goto end;
 
 	for (i = 1; i < board->rows - 1; i++) {
 		for (j = 1; j < board->cols - 1; j++) {
+			tile = BOARD_AT(board, i, j);
+
+			if (tile > 8 || tile == 0)
+				continue;
+
 			switch (board_deduce_partial_from_tile(board, i, j)) {
 			case BOARD_SOLVE_TILE_SUCCESS:
 				ret = BOARD_SOLVE_SUCCESS;
@@ -746,42 +752,29 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 	int ret = BOARD_SOLVE_TILE_NOTHING;
 	int ro;	/* Neighbor row offset */
 	int co;	/* Neighbor column offset*/
-	int board_too_small;
-	int too_close_to_edge;
 	int viable_solutions_exist;
 	int tile_idx;
 	uint16_t always_mine;
 	uint16_t always_clear;
 	uint16_t mines;
-	uint16_t mine_mask = 0;		/* These mines must be present */
-	uint16_t unknown_mask = 0;	/* Mines can be placed here */
 	unsigned char *tile;
 	unsigned char total_mines;
 
-	/* How many mines are expected to come from the neighborhood of this tile */
+	/* How many mines expected to come from the neighborhood of this tile */
 	unsigned char expected_mine_counts[9];
 
 	unsigned char unknown_outside_neighbors[9] = { 0 };
 
 	unsigned char mine_locations = 0;		/* How many tiles can host a mine */
-	unsigned char known_mines = 0;			/* Number of mines we know locations of */
 	unsigned char missing_mines = 0;		/* Mines we must place */
 	unsigned char possible_mine_locations[9];	/* Indices of possible mine locations */
 	struct n_choose_k_uc_itr nck_itr;		/* Generator of unique choices */
-
-	if (BOARD_AT(board, row, col) > 8)
-		goto end;
-
-	board_too_small = board->rows < 3 || board->cols < 3;
-
-	too_close_to_edge = row < 1 || col < 1
-		|| row >= board->rows - 1 || col >= board->cols - 1;
-
-	if (board_too_small || too_close_to_edge)
-		goto end;
+	struct tile_neighborhood_s neighborhood;
 
 	total_mines = BOARD_AT(board, row, col);
 	expected_mine_counts[4] = total_mines;
+
+	tile_neighborhood(board, row, col, &neighborhood);
 
 	BOARD_FOREACH_NEIGHBOR(board, row, col, ro, co, tile) {
 		tile_idx = (ro + 1) * 3 + co + 1;
@@ -791,28 +784,21 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 				board, row, col, row + ro, col + co);
 		}
 
-		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN) {
-			unknown_tile_mask |= 1 << (tile_idx);
+		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN)
 			possible_mine_locations[mine_locations++] = tile_idx;
-		}
-
-		if (((*tile & ~TILE_DEDUCED) & (TILE_UNKNOWN | TILE_MINE)) == TILE_MINE) {
-			known_mine_mask |= 1 << (tile_idx);
-			known_mines++;
-		}
 
 		unknown_outside_neighbors[tile_idx] = board_count_unknown_outside_neighbors(
 				board, row, col, row + ro, col + co);
 	}
 
-	if (known_mines == total_mines || !unknown_tile_mask)
+	if (neighborhood.n_mines == total_mines || !neighborhood.unknown)
 		goto end;
 
-	missing_mines = total_mines - known_mines;
+	missing_mines = total_mines - neighborhood.n_mines;
 
 	/* We can only deduce information that was not previously known */
-	always_mine = unknown_tile_mask;
-	always_clear = unknown_tile_mask;
+	always_mine = neighborhood.unknown;
+	always_clear = neighborhood.unknown;
 
 	viable_solutions_exist = 0;
 
@@ -821,18 +807,17 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 		if (!always_mine && !always_clear)
 			break;
 
-		mines = known_mine_mask;
+		mines = neighborhood.mines;
 
-		for (i = 0; i < nck_itr.nchoices; i++) {
+		for (i = 0; i < nck_itr.nchoices; i++)
 			mines |= 1 << (possible_mine_locations[nck_itr.choices[i]]);
-		}
 
 		/* Check if current layout produces the expected mine neighbor
 		 * counts.
 		 * */
 		for (i = 0; (size_t)i < sizeof(expected_mine_counts); i++) {
 			/* Not a clear tile. Next. */
-			if ((1 << i) & (known_mine_mask | unknown_tile_mask))
+			if ((1 << i) & (neighborhood.mines | neighborhood.unknown))
 				continue;
 
 			if (expected_mine_counts[i] - popcount(mines & mine_count_masks[i])
@@ -862,16 +847,16 @@ enumerate_next:
 	 * always remained clear or contained mines. Such tiles are guaranteed
 	 * to be clear or contain mines respectively.
 	 * */
-	for (i = 0; i < 3 && always_mine; i++) {
+	for (i = 0; i < 3 && (always_mine | always_clear); i++) {
 		for (j = 0; j < 3; j++) {
 			if (!(BOARD_AT(board, row - 1 + i, col - 1 + j) & TILE_UNKNOWN))
 				continue;
 
 			if (always_mine & (1 << (i * 3 + j)))
-				BOARD_AT(board, row - 1 + i, col - 1 + j) = TILE_DEDUCED | TILE_MINE;
+				tile_deduce_mine(board, row, col, i - 1, j - 1);
 
 			if (always_clear & (1 << (i * 3 + j)))
-				BOARD_AT(board, row - 1 + i, col - 1 + j) = TILE_DEDUCED | TILE_CLEAR;
+				tile_deduce_clear(board, row, col, i - 1, j - 1);
 		}
 	}
 
@@ -926,4 +911,116 @@ static int board_count_known_outside_mines(
 	}
 
 	return ret;
+}
+
+static void tile_deduce_clear(const struct minesweeper_board *board,
+		int row, int col, int ro, int co)
+{
+	struct tile_neighborhood_s hood;
+
+	if (BOARD_DEBUG && !(BOARD_AT(board, row + ro, col + co) & TILE_UNKNOWN)) {
+		fprintf(stderr, "Deduced tile %i, %i to be clear even though we already know what it is...\n",
+				row + ro, col + co);
+		exit(127);
+	}
+
+	BOARD_AT(board, row + ro, col + co) = TILE_DEDUCED | TILE_CLEAR;
+
+	if (BOARD_DEBUG) {
+		tile_neighborhood(board, row, col, &hood);
+
+		if (hood.n_mines + hood.n_unknown < BOARD_AT(board, row, col)) {
+			fprintf(stderr, "Wrongly deduced tile %i, %i to be clear!\n", row, col);
+			board_print(board, stderr);
+			exit(127);
+		}
+	}
+}
+
+static void tile_deduce_mine(const struct minesweeper_board *board,
+		int row, int col, int ro, int co)
+{
+	struct tile_neighborhood_s hood;
+
+	if (BOARD_DEBUG && !(BOARD_AT(board, row + ro, col + co) & TILE_UNKNOWN)) {
+		fprintf(stderr, "Deduced tile %i, %i to be a mine even though we already know what it is...\n",
+				row + ro, col + co);
+		exit(127);
+	}
+
+	BOARD_AT(board, row + ro, col + co) = TILE_DEDUCED | TILE_MINE;
+
+	if (BOARD_DEBUG) {
+		tile_neighborhood(board, row, col, &hood);
+
+		if (hood.n_mines + hood.n_unknown < BOARD_AT(board, row, col)) {
+			fprintf(stderr, "Wrongly deduced tile %i, %i to be a mine!\n",
+					row + ro, col + co);
+
+			fprintf(stderr, "At %i, %i: %i mines + %i unknown tiles < %i\n",
+					row + ro, col + co,
+					hood.n_mines, hood.n_unknown, BOARD_AT(board, row, col));
+			board_print(board, stderr);
+			exit(127);
+		}
+	}
+}
+
+static void tile_reveal_mine(struct minesweeper_board *board, int row, int col)
+{
+	unsigned char tile;
+
+	tile = BOARD_AT(board, row, col);
+
+	if (BOARD_DEBUG) {
+		if (!(tile & TILE_MINE)) {
+			fprintf(stderr, "Tile %i, %i wrongly assumed to be a mine!", row, col);
+			board_print(board, stderr);
+			exit(127);
+		}
+	}
+
+	BOARD_AT(board, row, col) &= ~TILE_UNKNOWN;
+	BOARD_AT(board, row, col) |= TILE_DEDUCED;
+}
+
+static void tile_reveal_clear(struct minesweeper_board *board, int row, int col)
+{
+	if (BOARD_DEBUG) {
+		if (BOARD_AT(board, row, col) & TILE_MINE) {
+			fprintf(stderr, "Tile %i, %i wrongly assumed to be clear!\n", row, col);
+			board_print(board, stderr);
+			exit(127);
+		}
+	}
+
+	BOARD_AT(board, row, col) &= ~TILE_UNKNOWN;
+	BOARD_AT(board, row, col) |= TILE_DEDUCED;
+}
+
+static void tile_neighborhood(
+		const struct minesweeper_board *board,
+		int row, int col,
+		struct tile_neighborhood_s *ret)
+{
+	int ro;
+	int co;
+	int tile_idx;
+	unsigned char *tile;
+
+	memset(ret, 0, sizeof(*ret));
+
+	BOARD_FOREACH_NEIGHBOR(board, row, col, ro, co, tile) {
+		tile_idx = (ro + 1) * 3 + co + 1;
+
+		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN) {
+			ret->n_unknown++;
+			ret->unknown |= 1 << tile_idx;
+		}
+
+		if ((*tile & (TILE_UNKNOWN | TILE_MINE)) == TILE_MINE) {
+			ret->n_mines++;
+			ret->mines |= 1 << tile_idx;
+		}
+	}
 }

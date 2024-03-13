@@ -63,6 +63,7 @@ int board_mine_numbers_consistent(const struct minesweeper_board *board);
 
 void board_read(struct minesweeper_board *board, FILE *file);
 int board_to_string_buf(const struct minesweeper_board *board, struct gr_buffer *buf);
+int board_print(const struct minesweeper_board *board, FILE *out);
 
 #define BOARD_SOLVE_SUCCESS	0
 #define BOARD_SOLVE_PARTIAL	1
