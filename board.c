@@ -617,9 +617,9 @@ static void tile_deduce_mine(const struct minesweeper_board *board, int row, int
 struct tile_neighborhood_s {
 	int n_mines;
 	int n_unknown;
+	unsigned short mines;
+	unsigned short unknown;
 	unsigned char tile;
-	unsigned char mines;
-	unsigned char unknown;
 };
 
 static void tile_neighborhood(
@@ -754,6 +754,9 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 	int co;	/* Neighbor column offset*/
 	int viable_solutions_exist;
 	int tile_idx;
+	int deficit;
+	int cannot_satisfy_neighbor;
+	int too_many_mines;
 	uint16_t always_mine;
 	uint16_t always_clear;
 	uint16_t mines;
@@ -820,12 +823,13 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 			if ((1 << i) & (neighborhood.mines | neighborhood.unknown))
 				continue;
 
-			if (expected_mine_counts[i] - popcount(mines & mine_count_masks[i])
-					> unknown_outside_neighbors[i]
-					|| popcount(mines & mine_count_masks[i]) > expected_mine_counts[i])
-			{
+			deficit = expected_mine_counts[i] - popcount(mines & mine_count_masks[i]);
+			cannot_satisfy_neighbor = deficit > unknown_outside_neighbors[i];
+
+			too_many_mines = popcount(mines & mine_count_masks[i]) > expected_mine_counts[i];
+
+			if (cannot_satisfy_neighbor || too_many_mines)
 				goto enumerate_next;
-			}
 		}
 
 		viable_solutions_exist = 1;
@@ -1016,9 +1020,7 @@ static void tile_neighborhood(
 		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN) {
 			ret->n_unknown++;
 			ret->unknown |= 1 << tile_idx;
-		}
-
-		if ((*tile & (TILE_UNKNOWN | TILE_MINE)) == TILE_MINE) {
+		} else if (*tile & TILE_MINE) {
 			ret->n_mines++;
 			ret->mines |= 1 << tile_idx;
 		}
