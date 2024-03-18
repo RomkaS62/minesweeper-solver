@@ -1,4 +1,3 @@
-#include <stdint.h>
 #include <string.h>
 
 #include <gramas/buf.h>
@@ -619,6 +618,7 @@ struct tile_neighborhood_s {
 	int n_unknown;
 	unsigned short mines;
 	unsigned short unknown;
+	unsigned short deduced;
 	unsigned char tile;
 };
 
@@ -696,7 +696,7 @@ static int board_deduce_partial_cases(struct minesweeper_board *board)
 				break;
 			case BOARD_SOLVE_TILE_NOTHING:
 				break;
-			case BOARD_SOLVE_TILE_ERROR:
+			default:
 				ret = BOARD_SOLVE_BUG;
 				goto end;
 			}
@@ -757,9 +757,9 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 	int deficit;
 	int cannot_satisfy_neighbor;
 	int too_many_mines;
-	uint16_t always_mine;
-	uint16_t always_clear;
-	uint16_t mines;
+	unsigned short always_mine;
+	unsigned short always_clear;
+	unsigned short mines;
 	unsigned char *tile;
 	unsigned char total_mines;
 
@@ -799,7 +799,6 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 
 	missing_mines = total_mines - neighborhood.n_mines;
 
-	/* We can only deduce information that was not previously known */
 	always_mine = neighborhood.unknown;
 	always_clear = neighborhood.unknown;
 
@@ -819,8 +818,11 @@ static int board_deduce_partial_from_tile(struct minesweeper_board *board, int r
 		 * counts.
 		 * */
 		for (i = 0; (size_t)i < sizeof(expected_mine_counts); i++) {
-			/* Not a clear tile. Next. */
-			if ((1 << i) & (neighborhood.mines | neighborhood.unknown))
+			/* Not a clear tile or deduced this iteration. In
+			 * either case how many mines are supposed to be
+			 * around this tile cannot be known. Skip.
+			 * */
+			if ((1 << i) & (neighborhood.mines | neighborhood.unknown | neighborhood.deduced))
 				continue;
 
 			deficit = expected_mine_counts[i] - popcount(mines & mine_count_masks[i]);
@@ -1016,6 +1018,9 @@ static void tile_neighborhood(
 
 	BOARD_FOREACH_NEIGHBOR(board, row, col, ro, co, tile) {
 		tile_idx = (ro + 1) * 3 + co + 1;
+
+		if (*tile & TILE_DEDUCED)
+			ret->deduced |= 1 << tile_idx;
 
 		if ((*tile & (TILE_UNKNOWN | TILE_DEDUCED)) == TILE_UNKNOWN) {
 			ret->n_unknown++;
