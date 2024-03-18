@@ -1,7 +1,5 @@
 #include "combine.h"
 
-#define CURRENT_CHOICE(__itr) ((__itr)->choices[(__itr)->choice])
-
 void n_choose_k_init(struct n_choose_k_uc_itr *itr, unsigned char nitems, unsigned char nchoices)
 {
 	unsigned char i;
@@ -13,7 +11,6 @@ void n_choose_k_init(struct n_choose_k_uc_itr *itr, unsigned char nitems, unsign
 
 	itr->nitems = nitems;
 	itr->nchoices = nchoices;
-	itr->choice = nchoices - 1;
 	itr->state = N_CHOOSE_K_HAS_NEXT;
 
 	for (i = 0; i < itr->nchoices; i++)
@@ -22,27 +19,25 @@ void n_choose_k_init(struct n_choose_k_uc_itr *itr, unsigned char nitems, unsign
 
 void n_choose_k_next(struct n_choose_k_uc_itr *itr)
 {
+	unsigned char i;
+
+	i = itr->nchoices - 1;
+
 	if (itr->state == N_CHOOSE_K_DONE)
 		return;
 
-	while (CURRENT_CHOICE(itr) >= itr->nitems - itr->nchoices + itr->choice
-			&& itr->choice > 0)
-	{
-		itr->choice--;
-	}
+	while (itr->choices[i] >= itr->nitems - itr->nchoices + i && i > 0)
+		i--;
 
-	if (itr->choice == 0 && CURRENT_CHOICE(itr) >= itr->nitems - itr->nchoices) {
+	if (i == 0 && itr->choices[i] >= itr->nitems - itr->nchoices) {
 		itr->state = N_CHOOSE_K_DONE;
 		return;
 	}
 
-	CURRENT_CHOICE(itr)++;
+	itr->choices[i]++;
 
-	for (; itr->choice < itr->nchoices - 1; itr->choice++) {
-		itr->choices[itr->choice + 1] = CURRENT_CHOICE(itr) + 1;
-	}
-
-	itr->choice = itr->nchoices - 1;
+	for (; i < itr->nchoices - 1; i++)
+		itr->choices[i + 1] = itr->choices[i] + 1;
 
 	return;
 }

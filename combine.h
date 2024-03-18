@@ -7,7 +7,6 @@
 struct n_choose_k_uc_itr {
 	unsigned char nitems;
 	unsigned char nchoices;
-	unsigned char choice;
 	unsigned char state;
 
 	/* Unique combination of choices of integers between 0 and nitems - 1.
